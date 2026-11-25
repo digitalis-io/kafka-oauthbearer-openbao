@@ -1,0 +1,52 @@
+name: kafka-oauth
+
+services:
+  openbao:
+    image: openbao/openbao:2.4.1
+    hostname: openbao
+    command: ["server", "-dev", "-dev-root-token-id=root", "-dev-listen-address=0.0.0.0:8200"]
+    environment:
+      BAO_ADDR: http://127.0.0.1:8200
+      BAO_TOKEN: root
+    cap_add: [IPC_LOCK]
+    ports:
+      - "8200:8200"
+
+  kafka:
+    image: apache/kafka:4.4.0
+    hostname: kafka
+    environment:
+      KAFKA_OPTS: -Dorg.apache.kafka.sasl.oauthbearer.allowed.urls=http://openbao:8200/v1/identity/oidc/.well-known/keys
+    command:
+      - /bin/bash
+      - -c
+      - >-
+        /opt/kafka/bin/kafka-storage.sh format --ignore-formatted
+        -t MkU3OEVBNTcwNTJENDM2Qk -c /etc/kafka/server.properties &&
+        exec /opt/kafka/bin/kafka-server-start.sh /etc/kafka/server.properties
+    volumes:
+      - ./kafka/server.properties:/etc/kafka/server.properties:ro
+      - ./certs/broker:/etc/kafka/certs:ro
+      - ./certs/admin:/etc/kafka/admin:ro
+      - ./client/admin.properties:/etc/kafka/admin.properties:ro
+    profiles: [kafka]
+
+  billing-agent:
+    image: openbao/openbao:2.4.1
+    entrypoint: ["bao", "agent", "-config=/agent/agent.hcl"]
+    volumes:
+      - ./agent/billing-agent.hcl:/agent/agent.hcl:ro
+      - ./agent/billing-service:/agent/creds:ro
+      - ./tokens/billing-service:/tokens
+    profiles: [apps]
+
+  billing-app:
+    image: apache/kafka:4.4.0
+    environment:
+      KAFKA_OPTS: -Dorg.apache.kafka.sasl.oauthbearer.allowed.urls=file:///tokens/billing-service.jwt
+    entrypoint: ["/bin/bash", "/etc/client/billing-app.sh"]
+    volumes:
+      - ./client/billing.properties:/etc/client/billing.properties:ro
+      - ./client/billing-app.sh:/etc/client/billing-app.sh:ro
+      - ./tokens/billing-service:/tokens:ro
+    profiles: [apps]
